@@ -1,3 +1,6 @@
+
+-- From: https://github.com/ioguix/pgsql-bloat-estimation
+
 -- WARNING: executed with a non-superuser role, the query inspect only index on tables you are granted to read.
 -- WARNING: rows with is_na = 't' are known to have bad statistics ("name" type is not supported).
 -- This query is compatible with PostgreSQL 8.2 and after
@@ -163,7 +166,6 @@ FROM (
 --   AND tblpages*((pst).free_percent + (pst).dead_tuple_percent)::float4/100 >= 1
 ORDER BY schemaname, tblname;
 
-
 -- From https://wiki.postgresql.org/wiki/Lock_dependency_information
 
 CREATE OR REPLACE VIEW blocking_tree AS
@@ -311,3 +313,62 @@ SELECT concat(lpad('=> ', 4*depth, ' '),pid::text) AS "PID"
 , lock_state AS "State"
 FROM blocking_lock
 ORDER BY seq;
+
+
+-- From https://wiki.postgresql.org/wiki/Index_Maintenance
+
+CREATE VIEW duplicate_indexes AS SELECT pg_size_pretty(sum(pg_relation_size(idx))::bigint) as size,
+       (array_agg(idx))[1] as idx1, (array_agg(idx))[2] as idx2,
+       (array_agg(idx))[3] as idx3, (array_agg(idx))[4] as idx4
+FROM (
+    SELECT indexrelid::regclass as idx, (indrelid::text ||E'\n'|| indclass::text ||E'\n'|| indkey::text ||E'\n'||
+                                         coalesce(indexprs::text,'')||E'\n' || coalesce(indpred::text,'')) as key
+    FROM pg_index) sub
+GROUP BY key HAVING count(*)>1
+ORDER BY sum(pg_relation_size(idx)) DESC;
+
+-- From https://wiki.postgresql.org/wiki/Disk_Usage
+
+CREATE VIEW table_sizes AS WITH RECURSIVE pg_inherit(inhrelid, inhparent) AS
+    (select inhrelid, inhparent
+    FROM pg_inherits
+    UNION
+    SELECT child.inhrelid, parent.inhparent
+    FROM pg_inherit child, pg_inherits parent
+    WHERE child.inhparent = parent.inhrelid),
+pg_inherit_short AS (SELECT * FROM pg_inherit WHERE inhparent NOT IN (SELECT inhrelid FROM pg_inherit))
+SELECT table_schema
+    , TABLE_NAME
+    , row_estimate
+    , pg_size_pretty(total_bytes) AS total
+    , pg_size_pretty(index_bytes) AS INDEX
+    , pg_size_pretty(toast_bytes) AS toast
+    , pg_size_pretty(table_bytes) AS TABLE
+    , total_bytes::float8 / sum(total_bytes) OVER () AS total_size_share
+  FROM (
+    SELECT *, total_bytes-index_bytes-COALESCE(toast_bytes,0) AS table_bytes
+    FROM (
+         SELECT c.oid
+              , nspname AS table_schema
+              , relname AS TABLE_NAME
+              , SUM(c.reltuples) OVER (partition BY parent) AS row_estimate
+              , SUM(pg_total_relation_size(c.oid)) OVER (partition BY parent) AS total_bytes
+              , SUM(pg_indexes_size(c.oid)) OVER (partition BY parent) AS index_bytes
+              , SUM(pg_total_relation_size(reltoastrelid)) OVER (partition BY parent) AS toast_bytes
+              , parent
+          FROM (
+                SELECT pg_class.oid
+                    , reltuples
+                    , relname
+                    , relnamespace
+                    , pg_class.reltoastrelid
+                    , COALESCE(inhparent, pg_class.oid) parent
+                FROM pg_class
+                    LEFT JOIN pg_inherit_short ON inhrelid = oid
+                WHERE relkind IN ('r', 'p')
+             ) c
+             LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+  ) a
+  WHERE oid = parent
+) a
+ORDER BY total_bytes DESC;
