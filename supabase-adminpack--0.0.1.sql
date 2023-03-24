@@ -433,3 +433,174 @@ FROM
   pg_stat_user_tables
 ORDER BY
   n_live_tup DESC;
+
+------------------------------------------------------------------------------
+
+-- psql meta-command views
+
+CREATE VIEW d AS
+  SELECT
+    n.nspname as "schema",
+    c.relname as "name",
+  CASE c.relkind
+    WHEN 'r' THEN 'table'
+    WHEN 'v' THEN 'view'
+    WHEN 'm' THEN 'materialized view'
+    WHEN 'i' THEN 'index'
+    WHEN 'S' THEN 'sequence'
+    WHEN 't' THEN 'TOAST table'
+    WHEN 'f' THEN 'foreign table'
+    WHEN 'p' THEN 'partitioned table'
+    WHEN 'I' THEN 'partitioned index'
+    END as "type",
+  pg_catalog.pg_get_userbyid(c.relowner) AS "owner"
+FROM pg_catalog.pg_class c
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+ORDER BY 1,2;
+
+CREATE VIEW dt AS
+    SELECT * from d WHERE type in('table', 'partitioned table', 'TOAST table');
+
+CREATE VIEW dv AS
+    SELECT * from d WHERE type = 'view';
+
+CREATE VIEW dm AS
+    SELECT * from d WHERE type = 'materialized view';
+
+--- Functions
+
+CREATE VIEW df AS
+ SELECT n.nspname as "schema",
+   p.proname as "name",
+   pg_catalog.pg_get_function_result(p.oid) as "result_data_type",
+   pg_catalog.pg_get_function_arguments(p.oid) as "argument_data_types",
+ CASE p.prokind
+  WHEN 'a' THEN 'agg'
+  WHEN 'w' THEN 'window'
+  WHEN 'p' THEN 'proc'
+  ELSE 'func'
+ END as "type"
+FROM pg_catalog.pg_proc p
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+ORDER BY 1, 2, 4;
+
+CREATE VIEW da AS SELECT * from df where type = 'agg';
+
+-- tablespaces
+
+CREATE VIEW db AS SELECT spcname AS "name",
+  pg_catalog.pg_get_userbyid(spcowner) AS "owner",
+  pg_catalog.pg_tablespace_location(oid) AS "location"
+FROM pg_catalog.pg_tablespace
+ORDER BY 1;
+
+-- permissions
+
+CREATE VIEW dp AS
+    SELECT n.nspname as "schema",
+      c.relname as "name",
+      CASE c.relkind
+        WHEN 'r' THEN 'table'
+        WHEN 'v' THEN 'view'
+        WHEN 'm' THEN 'materialized view'
+        WHEN 'S' THEN 'sequence'
+        WHEN 'f' THEN 'foreign table'
+        WHEN 'p' THEN 'partitioned table'
+        END AS "type",
+  pg_catalog.array_to_string(c.relacl, E'\n') AS "access_privileges",
+  pg_catalog.array_to_string(ARRAY(
+    SELECT attname || E':\n  ' || pg_catalog.array_to_string(attacl, E'\n  ')
+    FROM pg_catalog.pg_attribute a
+    WHERE attrelid = c.oid AND NOT attisdropped AND attacl IS NOT NULL
+  ), E'\n') AS "column_privileges",
+  pg_catalog.array_to_string(ARRAY(
+    SELECT polname
+    || CASE WHEN NOT polpermissive THEN
+       E' (RESTRICTIVE)'
+       ELSE '' END
+    || CASE WHEN polcmd != '*' THEN
+           E' (' || polcmd::pg_catalog.text || E'):'
+       ELSE E':'
+       END
+    || CASE WHEN polqual IS NOT NULL THEN
+           E'\n  (u): ' || pg_catalog.pg_get_expr(polqual, polrelid)
+       ELSE E''
+       END
+    || CASE WHEN polwithcheck IS NOT NULL THEN
+           E'\n  (c): ' || pg_catalog.pg_get_expr(polwithcheck, polrelid)
+       ELSE E''
+       END    || CASE WHEN polroles <> '{0}' THEN
+           E'\n  to: ' || pg_catalog.array_to_string(
+               ARRAY(
+                   SELECT rolname
+                   FROM pg_catalog.pg_roles
+                   WHERE oid = ANY (polroles)
+                   ORDER BY 1
+               ), E', ')
+       ELSE E''
+       END
+    FROM pg_catalog.pg_policy pol
+    WHERE polrelid = c.oid), E'\n')
+    AS "policies"
+FROM pg_catalog.pg_class c
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r','v','m','S','f','p')
+  AND n.nspname !~ '^pg_' AND pg_catalog.pg_table_is_visible(c.oid)
+ORDER BY 1, 2;
+
+CREATE VIEW ddp AS
+  SELECT
+    pg_catalog.pg_get_userbyid(d.defaclrole) AS "Owner",
+    n.nspname AS "schema",
+    CASE d.defaclobjtype
+      WHEN 'r' THEN 'table'
+      WHEN 'S' THEN 'sequence'
+      WHEN 'f' THEN 'function'
+      WHEN 'T' THEN 'type'
+      WHEN 'n' THEN 'schema'
+      END AS "type",
+    pg_catalog.array_to_string(d.defaclacl, E'\n') AS "access_privileges"
+FROM pg_catalog.pg_default_acl d
+     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = d.defaclnamespace
+ORDER BY 1, 2, 3;
+
+
+-- schemas
+
+CREATE VIEW dn AS
+    SELECT n.nspname AS "name",
+  pg_catalog.pg_get_userbyid(n.nspowner) AS "owner"
+FROM pg_catalog.pg_namespace n
+WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+ORDER BY 1;
+
+
+-- extensions
+
+CREATE VIEW dx AS
+    SELECT e.extname AS "name",
+    e.extversion AS "version",
+    n.nspname AS "schema",
+    c.description AS "description"
+FROM pg_catalog.pg_extension e
+    LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
+    LEFT JOIN pg_catalog.pg_description c ON c.objoid = e.oid
+    AND c.classoid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+ORDER BY 1;
+
+
+-- roles
+
+CREATE VIEW du AS
+    SELECT r.rolname, r.rolsuper, r.rolinherit,
+      r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
+      r.rolconnlimit, r.rolvaliduntil,
+      ARRAY(SELECT b.rolname
+            FROM pg_catalog.pg_auth_members m
+            JOIN pg_catalog.pg_roles b ON (m.roleid = b.oid)
+            WHERE m.member = r.oid) as memberof
+    , r.rolreplication
+    , r.rolbypassrls
+FROM pg_catalog.pg_roles r
+WHERE r.rolname !~ '^pg_'
+ORDER BY 1;
