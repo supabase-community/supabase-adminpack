@@ -402,7 +402,7 @@ CREATE VIEW database_sizes AS SELECT pg_database.datname,
 FROM pg_database
 ORDER BY pg_database_size(pg_database.datname) DESC;
 
-CREATE VIEW schema_sizes SELECT A.schemaname,
+CREATE VIEW schema_sizes AS SELECT A.schemaname,
        pg_size_pretty (SUM(pg_relation_size(C.oid))) as table,
        pg_size_pretty (SUM(pg_total_relation_size(C.oid)-pg_relation_size(C.oid))) as index,
        pg_size_pretty (SUM(pg_total_relation_size(C.oid))) as table_index,
