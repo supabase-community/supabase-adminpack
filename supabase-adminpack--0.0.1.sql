@@ -462,7 +462,7 @@ CREATE VIEW describe_tables AS
     SELECT * from describe_relations WHERE type in('table', 'partitioned table', 'TOAST table');
 
 CREATE VIEW describe_views AS
-    SELECT * from describe_relations type = 'view';
+    SELECT * from describe_relations WHERE type = 'view';
 
 CREATE VIEW describe_matviews AS
     SELECT * from describe_relations WHERE type = 'materialized view';
