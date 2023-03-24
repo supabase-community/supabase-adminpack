@@ -459,13 +459,13 @@ FROM pg_catalog.pg_class c
 ORDER BY 1,2;
 
 CREATE VIEW describe_tables AS
-    SELECT * from describe_relation WHERE type in('table', 'partitioned table', 'TOAST table');
+    SELECT * from describe_relations WHERE type in('table', 'partitioned table', 'TOAST table');
 
 CREATE VIEW describe_views AS
-    SELECT * from describe_relation WHERE type = 'view';
+    SELECT * from describe_relations type = 'view';
 
 CREATE VIEW describe_matviews AS
-    SELECT * from describe_relation WHERE type = 'materialized view';
+    SELECT * from describe_relations WHERE type = 'materialized view';
 
 --- Functions
 
@@ -484,7 +484,7 @@ FROM pg_catalog.pg_proc p
      LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
 ORDER BY 1, 2, 4;
 
-CREATE VIEW describe_aggregates AS SELECT * from describe_function where type = 'agg';
+CREATE VIEW describe_aggregates AS SELECT * from describe_functions where type = 'agg';
 
 -- tablespaces
 
