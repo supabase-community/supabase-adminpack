@@ -168,7 +168,7 @@ ORDER BY schemaname, tblname;
 
 -- From https://wiki.postgresql.org/wiki/Lock_dependency_information
 
-CREATE OR REPLACE VIEW blocking_tree AS
+CREATE OR REPLACE VIEW blocking_pid_tree AS
 WITH RECURSIVE
   lock_composite(requested, current) AS (VALUES
     ('AccessShareLock'::text, 'AccessExclusiveLock'::text),
@@ -438,7 +438,7 @@ ORDER BY
 
 -- psql meta-command views
 
-CREATE VIEW d AS
+CREATE VIEW describe_relations AS
   SELECT
     n.nspname as "schema",
     c.relname as "name",
@@ -458,18 +458,18 @@ FROM pg_catalog.pg_class c
      LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 ORDER BY 1,2;
 
-CREATE VIEW dt AS
-    SELECT * from d WHERE type in('table', 'partitioned table', 'TOAST table');
+CREATE VIEW describe_tables AS
+    SELECT * from describe_relation WHERE type in('table', 'partitioned table', 'TOAST table');
 
-CREATE VIEW dv AS
-    SELECT * from d WHERE type = 'view';
+CREATE VIEW describe_views AS
+    SELECT * from describe_relation WHERE type = 'view';
 
-CREATE VIEW dm AS
-    SELECT * from d WHERE type = 'materialized view';
+CREATE VIEW describe_matviews AS
+    SELECT * from describe_relation WHERE type = 'materialized view';
 
 --- Functions
 
-CREATE VIEW df AS
+CREATE VIEW describe_functions AS
  SELECT n.nspname as "schema",
    p.proname as "name",
    pg_catalog.pg_get_function_result(p.oid) as "result_data_type",
@@ -484,11 +484,11 @@ FROM pg_catalog.pg_proc p
      LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
 ORDER BY 1, 2, 4;
 
-CREATE VIEW da AS SELECT * from df where type = 'agg';
+CREATE VIEW describe_aggregates AS SELECT * from describe_function where type = 'agg';
 
 -- tablespaces
 
-CREATE VIEW db AS SELECT spcname AS "name",
+CREATE VIEW describe_tablespaces AS SELECT spcname AS "name",
   pg_catalog.pg_get_userbyid(spcowner) AS "owner",
   pg_catalog.pg_tablespace_location(oid) AS "location"
 FROM pg_catalog.pg_tablespace
@@ -496,7 +496,7 @@ ORDER BY 1;
 
 -- permissions
 
-CREATE VIEW dp AS
+CREATE VIEW describe_permissions AS
     SELECT n.nspname as "schema",
       c.relname as "name",
       CASE c.relkind
@@ -548,9 +548,9 @@ WHERE c.relkind IN ('r','v','m','S','f','p')
   AND n.nspname !~ '^pg_' AND pg_catalog.pg_table_is_visible(c.oid)
 ORDER BY 1, 2;
 
-CREATE VIEW ddp AS
+CREATE VIEW describe_default_permissions AS
   SELECT
-    pg_catalog.pg_get_userbyid(d.defaclrole) AS "Owner",
+    pg_catalog.pg_get_userbyid(d.defaclrole) AS "owner",
     n.nspname AS "schema",
     CASE d.defaclobjtype
       WHEN 'r' THEN 'table'
@@ -567,7 +567,7 @@ ORDER BY 1, 2, 3;
 
 -- schemas
 
-CREATE VIEW dn AS
+CREATE VIEW describe_namespaces AS
     SELECT n.nspname AS "name",
   pg_catalog.pg_get_userbyid(n.nspowner) AS "owner"
 FROM pg_catalog.pg_namespace n
@@ -577,7 +577,7 @@ ORDER BY 1;
 
 -- extensions
 
-CREATE VIEW dx AS
+CREATE VIEW describe_extensions AS
     SELECT e.extname AS "name",
     e.extversion AS "version",
     n.nspname AS "schema",
@@ -591,7 +591,7 @@ ORDER BY 1;
 
 -- roles
 
-CREATE VIEW du AS
+CREATE VIEW describe_roles AS
     SELECT r.rolname, r.rolsuper, r.rolinherit,
       r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
       r.rolconnlimit, r.rolvaliduntil,
@@ -604,3 +604,18 @@ CREATE VIEW du AS
 FROM pg_catalog.pg_roles r
 WHERE r.rolname !~ '^pg_'
 ORDER BY 1;
+
+-- types
+
+CREATE VIEW describe_types AS
+    SELECT n.nspname as "schema",
+      pg_catalog.format_type(t.oid, NULL) AS "name",
+      pg_catalog.obj_description(t.oid, 'pg_type') as "description"
+    FROM pg_catalog.pg_type t
+         LEFT JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+    WHERE (t.typrelid = 0 OR (SELECT c.relkind = 'c' FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid))
+      AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_type el WHERE el.oid = t.typelem AND el.typarray = t.oid)
+          AND n.nspname <> 'pg_catalog'
+          AND n.nspname <> 'information_schema'
+      AND pg_catalog.pg_type_is_visible(t.oid)
+    ORDER BY 1, 2;
