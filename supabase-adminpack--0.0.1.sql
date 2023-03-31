@@ -434,188 +434,590 @@ FROM
 ORDER BY
   n_live_tup DESC;
 
-------------------------------------------------------------------------------
+-- postgres-meta queries as views from: https://github.com/supabase/postgres-meta
 
--- psql meta-command views
+CREATE VIEW pgmeta_columns AS SELECT
+  c.oid :: int8 AS table_id,
+  nc.nspname AS schema,
+  c.relname AS table,
+  (c.oid || '.' || a.attnum) AS id,
+  a.attnum AS ordinal_position,
+  a.attname AS name,
+  CASE
+    WHEN a.atthasdef THEN pg_get_expr(ad.adbin, ad.adrelid)
+    ELSE NULL
+  END AS default_value,
+  CASE
+    WHEN t.typtype = 'd' THEN CASE
+      WHEN bt.typelem <> 0 :: oid
+      AND bt.typlen = -1 THEN 'ARRAY'
+      WHEN nbt.nspname = 'pg_catalog' THEN format_type(t.typbasetype, NULL)
+      ELSE 'USER-DEFINED'
+    END
+    ELSE CASE
+      WHEN t.typelem <> 0 :: oid
+      AND t.typlen = -1 THEN 'ARRAY'
+      WHEN nt.nspname = 'pg_catalog' THEN format_type(a.atttypid, NULL)
+      ELSE 'USER-DEFINED'
+    END
+  END AS data_type,
+  COALESCE(bt.typname, t.typname) AS format,
+  a.attidentity IN ('a', 'd') AS is_identity,
+  CASE
+    a.attidentity
+    WHEN 'a' THEN 'ALWAYS'
+    WHEN 'd' THEN 'BY DEFAULT'
+    ELSE NULL
+  END AS identity_generation,
+  a.attgenerated IN ('s') AS is_generated,
+  NOT (
+    a.attnotnull
+    OR t.typtype = 'd' AND t.typnotnull
+  ) AS is_nullable,
+  (
+    c.relkind IN ('r', 'p')
+    OR c.relkind IN ('v', 'f') AND pg_column_is_updatable(c.oid, a.attnum, FALSE)
+  ) AS is_updatable,
+  uniques.table_id IS NOT NULL AS is_unique,
+  array_to_json(
+    array(
+      SELECT
+        enumlabel
+      FROM
+        pg_catalog.pg_enum enums
+      WHERE
+        enums.enumtypid = coalesce(bt.oid, t.oid)
+        OR enums.enumtypid = coalesce(bt.typelem, t.typelem)
+      ORDER BY
+        enums.enumsortorder
+    )
+  ) AS enums,
+  col_description(c.oid, a.attnum) AS comment
+FROM
+  pg_attribute a
+  LEFT JOIN pg_attrdef ad ON a.attrelid = ad.adrelid
+  AND a.attnum = ad.adnum
+  JOIN (
+    pg_class c
+    JOIN pg_namespace nc ON c.relnamespace = nc.oid
+  ) ON a.attrelid = c.oid
+  JOIN (
+    pg_type t
+    JOIN pg_namespace nt ON t.typnamespace = nt.oid
+  ) ON a.atttypid = t.oid
+  LEFT JOIN (
+    pg_type bt
+    JOIN pg_namespace nbt ON bt.typnamespace = nbt.oid
+  ) ON t.typtype = 'd'
+  AND t.typbasetype = bt.oid
+  LEFT JOIN (
+    SELECT
+      conrelid AS table_id,
+      conkey[1] AS ordinal_position
+    FROM pg_catalog.pg_constraint
+    WHERE contype = 'u' AND cardinality(conkey) = 1
+  ) AS uniques ON uniques.table_id = c.oid AND uniques.ordinal_position = a.attnum
+WHERE
+  NOT pg_is_other_temp_schema(nc.oid)
+  AND a.attnum > 0
+  AND NOT a.attisdropped
+  AND (c.relkind IN ('r', 'v', 'm', 'f', 'p'))
+  AND (
+    pg_has_role(c.relowner, 'USAGE')
+    OR has_column_privilege(
+      c.oid,
+      a.attnum,
+      'SELECT, INSERT, UPDATE, REFERENCES'
+    )
+  );
 
-CREATE VIEW describe_relations AS
-  SELECT
-    n.nspname as "schema",
-    c.relname as "name",
-  CASE c.relkind
-    WHEN 'r' THEN 'table'
-    WHEN 'v' THEN 'view'
-    WHEN 'm' THEN 'materialized view'
-    WHEN 'i' THEN 'index'
-    WHEN 'S' THEN 'sequence'
-    WHEN 't' THEN 'TOAST table'
-    WHEN 'f' THEN 'foreign table'
-    WHEN 'p' THEN 'partitioned table'
-    WHEN 'I' THEN 'partitioned index'
-    END as "type",
-  pg_catalog.pg_get_userbyid(c.relowner) AS "owner"
-FROM pg_catalog.pg_class c
-     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-ORDER BY 1,2;
+CREATE VIEW pgmeta_config AS SELECT
+  name,
+  setting,
+  category,
+  TRIM(split_part(category, '/', 1)) AS group,
+  TRIM(split_part(category, '/', 2)) AS subgroup,
+  unit,
+  short_desc,
+  extra_desc,
+  context,
+  vartype,
+  source,
+  min_val,
+  max_val,
+  enumvals,
+  boot_val,
+  reset_val,
+  sourcefile,
+  sourceline,
+  pending_restart
+FROM
+  pg_settings
+ORDER BY
+  category,
+  name;
 
-CREATE VIEW describe_tables AS
-    SELECT * from describe_relations WHERE type in('table', 'partitioned table', 'TOAST table');
+CREATE VIEW pgmeta_extensions AS SELECT
+  e.name,
+  n.nspname AS schema,
+  e.default_version,
+  x.extversion AS installed_version,
+  e.comment
+FROM
+  pg_available_extensions() e(name, default_version, comment)
+  LEFT JOIN pg_extension x ON e.name = x.extname
+  LEFT JOIN pg_namespace n ON x.extnamespace = n.oid;
 
-CREATE VIEW describe_views AS
-    SELECT * from describe_relations WHERE type = 'view';
+CREATE VIEW pgmeta_foreign_tables AS SELECT
+  c.oid :: int8 AS id,
+  n.nspname AS schema,
+  c.relname AS name,
+  obj_description(c.oid) AS comment
+FROM
+  pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE
+  c.relkind = 'f';
 
-CREATE VIEW describe_matviews AS
-    SELECT * from describe_relations WHERE type = 'materialized view';
+CREATE VIEW pgmeta_functions AS with functions as (
+  select
+    *,
+    -- proargmodes is null when all arg modes are IN
+    coalesce(
+      p.proargmodes,
+      array_fill('i'::text, array[cardinality(coalesce(p.proallargtypes, p.proargtypes))])
+    ) as arg_modes,
+    -- proargnames is null when all args are unnamed
+    coalesce(
+      p.proargnames,
+      array_fill(''::text, array[cardinality(coalesce(p.proallargtypes, p.proargtypes))])
+    ) as arg_names,
+    -- proallargtypes is null when all arg modes are IN
+    coalesce(p.proallargtypes, p.proargtypes) as arg_types,
+    array_cat(
+      array_fill(false, array[pronargs - pronargdefaults]),
+      array_fill(true, array[pronargdefaults])) as arg_has_defaults
+  from
+    pg_proc as p
+  where
+    p.prokind = 'f'
+)
+select
+  f.oid::int8 as id,
+  n.nspname as schema,
+  f.proname as name,
+  l.lanname as language,
+  case
+    when l.lanname = 'internal' then ''
+    else f.prosrc
+  end as definition,
+  case
+    when l.lanname = 'internal' then f.prosrc
+    else pg_get_functiondef(f.oid)
+  end as complete_statement,
+  coalesce(f_args.args, '[]') as args,
+  pg_get_function_arguments(f.oid) as argument_types,
+  pg_get_function_identity_arguments(f.oid) as identity_argument_types,
+  f.prorettype::int8 as return_type_id,
+  pg_get_function_result(f.oid) as return_type,
+  nullif(rt.typrelid::int8, 0) as return_type_relation_id,
+  f.proretset as is_set_returning_function,
+  case
+    when f.provolatile = 'i' then 'IMMUTABLE'
+    when f.provolatile = 's' then 'STABLE'
+    when f.provolatile = 'v' then 'VOLATILE'
+  end as behavior,
+  f.prosecdef as security_definer,
+  f_config.config_params as config_params
+from
+  functions f
+  left join pg_namespace n on f.pronamespace = n.oid
+  left join pg_language l on f.prolang = l.oid
+  left join pg_type rt on rt.oid = f.prorettype
+  left join (
+    select
+      oid,
+      jsonb_object_agg(param, value) filter (where param is not null) as config_params
+    from
+      (
+        select
+          oid,
+          (string_to_array(unnest(proconfig), '='))[1] as param,
+          (string_to_array(unnest(proconfig), '='))[2] as value
+        from
+          functions
+      ) as t
+    group by
+      oid
+  ) f_config on f_config.oid = f.oid
+  left join (
+    select
+      oid,
+      jsonb_agg(jsonb_build_object(
+        'mode', t2.mode,
+        'name', name,
+        'type_id', type_id,
+        'has_default', has_default
+      )) as args
+    from
+      (
+        select
+          oid,
+          unnest(arg_modes) as mode,
+          unnest(arg_names) as name,
+          unnest(arg_types)::int8 as type_id,
+          unnest(arg_has_defaults) as has_default
+        from
+          functions
+      ) as t1,
+      lateral (
+        select
+          case
+            when t1.mode = 'i' then 'in'
+            when t1.mode = 'o' then 'out'
+            when t1.mode = 'b' then 'inout'
+            when t1.mode = 'v' then 'variadic'
+            else 'table'
+          end as mode
+      ) as t2
+    group by
+      t1.oid
+  ) f_args on f_args.oid = f.oid;
 
---- Functions
+CREATE VIEW pgmeta_materialized_views AS select
+  c.oid::int8 as id,
+  n.nspname as schema,
+  c.relname as name,
+  c.relispopulated as is_populated,
+  obj_description(c.oid) as comment
+from
+  pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+where
+  c.relkind = 'm';
 
-CREATE VIEW describe_functions AS
- SELECT n.nspname as "schema",
-   p.proname as "name",
-   pg_catalog.pg_get_function_result(p.oid) as "result_data_type",
-   pg_catalog.pg_get_function_arguments(p.oid) as "argument_data_types",
- CASE p.prokind
-  WHEN 'a' THEN 'agg'
-  WHEN 'w' THEN 'window'
-  WHEN 'p' THEN 'proc'
-  ELSE 'func'
- END as "type"
-FROM pg_catalog.pg_proc p
-     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-ORDER BY 1, 2, 4;
+CREATE VIEW pgmeta_policies AS SELECT
+  pol.oid :: int8 AS id,
+  n.nspname AS schema,
+  c.relname AS table,
+  c.oid :: int8 AS table_id,
+  pol.polname AS name,
+  CASE
+    WHEN pol.polpermissive THEN 'PERMISSIVE' :: text
+    ELSE 'RESTRICTIVE' :: text
+  END AS action,
+  CASE
+    WHEN pol.polroles = '{0}' :: oid [] THEN array_to_json(
+      string_to_array('public' :: text, '' :: text) :: name []
+    )
+    ELSE array_to_json(
+      ARRAY(
+        SELECT
+          pg_roles.rolname
+        FROM
+          pg_roles
+        WHERE
+          pg_roles.oid = ANY (pol.polroles)
+        ORDER BY
+          pg_roles.rolname
+      )
+    )
+  END AS roles,
+  CASE
+    pol.polcmd
+    WHEN 'r' :: "char" THEN 'SELECT' :: text
+    WHEN 'a' :: "char" THEN 'INSERT' :: text
+    WHEN 'w' :: "char" THEN 'UPDATE' :: text
+    WHEN 'd' :: "char" THEN 'DELETE' :: text
+    WHEN '*' :: "char" THEN 'ALL' :: text
+    ELSE NULL :: text
+  END AS command,
+  pg_get_expr(pol.polqual, pol.polrelid) AS definition,
+  pg_get_expr(pol.polwithcheck, pol.polrelid) AS check
+FROM
+  pg_policy pol
+  JOIN pg_class c ON c.oid = pol.polrelid
+  LEFT JOIN pg_namespace n ON n.oid = c.relnamespace;
 
-CREATE VIEW describe_aggregates AS SELECT * from describe_functions where type = 'agg';
+CREATE VIEW pgmeta_primary_keys AS SELECT
+  n.nspname AS schema,
+  c.relname AS table_name,
+  a.attname AS name,
+  c.oid :: int8 AS table_id
+FROM
+  pg_index i,
+  pg_class c,
+  pg_attribute a,
+  pg_namespace n
+WHERE
+  i.indrelid = c.oid
+  AND c.relnamespace = n.oid
+  AND a.attrelid = c.oid
+  AND a.attnum = ANY (i.indkey)
+  AND i.indisprimary;
 
--- tablespaces
+CREATE VIEW pgmeta_publications AS SELECT
+  p.oid :: int8 AS id,
+  p.pubname AS name,
+  p.pubowner::regrole::text AS owner,
+  p.pubinsert AS publish_insert,
+  p.pubupdate AS publish_update,
+  p.pubdelete AS publish_delete,
+  p.pubtruncate AS publish_truncate,
+  CASE
+    WHEN p.puballtables THEN NULL
+    ELSE pr.tables
+  END AS tables
+FROM
+  pg_catalog.pg_publication AS p
+  LEFT JOIN LATERAL (
+    SELECT
+      COALESCE(
+        array_agg(
+          json_build_object(
+            'id',
+            c.oid :: int8,
+            'name',
+            c.relname,
+            'schema',
+            nc.nspname
+          )
+        ),
+        '{}'
+      ) AS tables
+    FROM
+      pg_catalog.pg_publication_rel AS pr
+      JOIN pg_class AS c ON pr.prrelid = c.oid
+      join pg_namespace as nc on c.relnamespace = nc.oid
+    WHERE
+      pr.prpubid = p.oid
+  ) AS pr ON 1 = 1;
 
-CREATE VIEW describe_tablespaces AS SELECT spcname AS "name",
-  pg_catalog.pg_get_userbyid(spcowner) AS "owner",
-  pg_catalog.pg_tablespace_location(oid) AS "location"
-FROM pg_catalog.pg_tablespace
-ORDER BY 1;
+CREATE VIEW pgmeta_relationships AS SELECT
+  c.oid :: int8 AS id,
+  c.conname AS constraint_name,
+  nsa.nspname AS source_schema,
+  csa.relname AS source_table_name,
+  sa.attname AS source_column_name,
+  nta.nspname AS target_table_schema,
+  cta.relname AS target_table_name,
+  ta.attname AS target_column_name
+FROM
+  pg_constraint c
+  JOIN (
+    pg_attribute sa
+    JOIN pg_class csa ON sa.attrelid = csa.oid
+    JOIN pg_namespace nsa ON csa.relnamespace = nsa.oid
+  ) ON sa.attrelid = c.conrelid
+  AND sa.attnum = ANY (c.conkey)
+  JOIN (
+    pg_attribute ta
+    JOIN pg_class cta ON ta.attrelid = cta.oid
+    JOIN pg_namespace nta ON cta.relnamespace = nta.oid
+  ) ON ta.attrelid = c.confrelid
+  AND ta.attnum = ANY (c.confkey)
+WHERE
+  c.contype = 'f';
 
--- permissions
+CREATE VIEW pgmeta_roles AS -- TODO: Consider using pg_authid vs. pg_roles for unencrypted password field
+SELECT
+  oid :: int8 AS id,
+  rolname AS name,
+  rolsuper AS is_superuser,
+  rolcreatedb AS can_create_db,
+  rolcreaterole AS can_create_role,
+  rolinherit AS inherit_role,
+  rolcanlogin AS can_login,
+  rolreplication AS is_replication_role,
+  rolbypassrls AS can_bypass_rls,
+  (
+    SELECT
+      COUNT(*)
+    FROM
+      pg_stat_activity
+    WHERE
+      pg_roles.rolname = pg_stat_activity.usename
+  ) AS active_connections,
+  CASE WHEN rolconnlimit = -1 THEN current_setting('max_connections') :: int8
+       ELSE rolconnlimit
+  END AS connection_limit,
+  rolpassword AS password,
+  rolvaliduntil AS valid_until,
+  rolconfig AS config
+FROM
+  pg_roles;
 
-CREATE VIEW describe_permissions AS
-    SELECT n.nspname as "schema",
-      c.relname as "name",
-      CASE c.relkind
-        WHEN 'r' THEN 'table'
-        WHEN 'v' THEN 'view'
-        WHEN 'm' THEN 'materialized view'
-        WHEN 'S' THEN 'sequence'
-        WHEN 'f' THEN 'foreign table'
-        WHEN 'p' THEN 'partitioned table'
-        END AS "type",
-  pg_catalog.array_to_string(c.relacl, E'\n') AS "access_privileges",
-  pg_catalog.array_to_string(ARRAY(
-    SELECT attname || E':\n  ' || pg_catalog.array_to_string(attacl, E'\n  ')
-    FROM pg_catalog.pg_attribute a
-    WHERE attrelid = c.oid AND NOT attisdropped AND attacl IS NOT NULL
-  ), E'\n') AS "column_privileges",
-  pg_catalog.array_to_string(ARRAY(
-    SELECT polname
-    || CASE WHEN NOT polpermissive THEN
-       E' (RESTRICTIVE)'
-       ELSE '' END
-    || CASE WHEN polcmd != '*' THEN
-           E' (' || polcmd::pg_catalog.text || E'):'
-       ELSE E':'
-       END
-    || CASE WHEN polqual IS NOT NULL THEN
-           E'\n  (u): ' || pg_catalog.pg_get_expr(polqual, polrelid)
-       ELSE E''
-       END
-    || CASE WHEN polwithcheck IS NOT NULL THEN
-           E'\n  (c): ' || pg_catalog.pg_get_expr(polwithcheck, polrelid)
-       ELSE E''
-       END    || CASE WHEN polroles <> '{0}' THEN
-           E'\n  to: ' || pg_catalog.array_to_string(
-               ARRAY(
-                   SELECT rolname
-                   FROM pg_catalog.pg_roles
-                   WHERE oid = ANY (polroles)
-                   ORDER BY 1
-               ), E', ')
-       ELSE E''
-       END
-    FROM pg_catalog.pg_policy pol
-    WHERE polrelid = c.oid), E'\n')
-    AS "policies"
-FROM pg_catalog.pg_class c
-     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-WHERE c.relkind IN ('r','v','m','S','f','p')
-  AND n.nspname !~ '^pg_' AND pg_catalog.pg_table_is_visible(c.oid)
-ORDER BY 1, 2;
+CREATE VIEW pgmeta_schemas AS select
+  n.oid::int8 as id,
+  n.nspname as name,
+  u.rolname as owner
+from
+  pg_namespace n,
+  pg_roles u
+where
+  n.nspowner = u.oid
+  and (
+    pg_has_role(n.nspowner, 'USAGE')
+    or has_schema_privilege(n.oid, 'CREATE, USAGE')
+  )
+  and not pg_catalog.starts_with(n.nspname, 'pg_temp_')
+  and not pg_catalog.starts_with(n.nspname, 'pg_toast_temp_');
 
-CREATE VIEW describe_default_permissions AS
-  SELECT
-    pg_catalog.pg_get_userbyid(d.defaclrole) AS "owner",
-    n.nspname AS "schema",
-    CASE d.defaclobjtype
-      WHEN 'r' THEN 'table'
-      WHEN 'S' THEN 'sequence'
-      WHEN 'f' THEN 'function'
-      WHEN 'T' THEN 'type'
-      WHEN 'n' THEN 'schema'
-      END AS "type",
-    pg_catalog.array_to_string(d.defaclacl, E'\n') AS "access_privileges"
-FROM pg_catalog.pg_default_acl d
-     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = d.defaclnamespace
-ORDER BY 1, 2, 3;
-
-
--- schemas
-
-CREATE VIEW describe_namespaces AS
-    SELECT n.nspname AS "name",
-  pg_catalog.pg_get_userbyid(n.nspowner) AS "owner"
-FROM pg_catalog.pg_namespace n
-WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
-ORDER BY 1;
+CREATE VIEW pgmeta_tables AS SELECT
+  c.oid :: int8 AS id,
+  nc.nspname AS schema,
+  c.relname AS name,
+  c.relrowsecurity AS rls_enabled,
+  c.relforcerowsecurity AS rls_forced,
+  CASE
+    WHEN c.relreplident = 'd' THEN 'DEFAULT'
+    WHEN c.relreplident = 'i' THEN 'INDEX'
+    WHEN c.relreplident = 'f' THEN 'FULL'
+    ELSE 'NOTHING'
+  END AS replica_identity,
+  pg_total_relation_size(format('%I.%I', nc.nspname, c.relname)) :: int8 AS bytes,
+  pg_size_pretty(
+    pg_total_relation_size(format('%I.%I', nc.nspname, c.relname))
+  ) AS size,
+  pg_stat_get_live_tuples(c.oid) AS live_rows_estimate,
+  pg_stat_get_dead_tuples(c.oid) AS dead_rows_estimate,
+  obj_description(c.oid) AS comment
+FROM
+  pg_namespace nc
+  JOIN pg_class c ON nc.oid = c.relnamespace
+WHERE
+  c.relkind IN ('r', 'p')
+  AND NOT pg_is_other_temp_schema(nc.oid)
+  AND (
+    pg_has_role(c.relowner, 'USAGE')
+    OR has_table_privilege(
+      c.oid,
+      'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+    )
+    OR has_any_column_privilege(c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')
+  );
 
 
--- extensions
+CREATE VIEW pgmeta_triggers AS SELECT
+  pg_t.oid AS id,
+  pg_t.tgrelid AS table_id,
+  CASE
+    WHEN pg_t.tgenabled = 'D' THEN 'DISABLED'
+    WHEN pg_t.tgenabled = 'O' THEN 'ORIGIN'
+    WHEN pg_t.tgenabled = 'R' THEN 'REPLICA'
+    WHEN pg_t.tgenabled = 'A' THEN 'ALWAYS'
+  END AS enabled_mode,
+  (
+    STRING_TO_ARRAY(
+      ENCODE(pg_t.tgargs, 'escape'), '\000'
+    )
+  )[:pg_t.tgnargs] AS function_args,
+  is_t.trigger_name AS name,
+  is_t.event_object_table AS table,
+  is_t.event_object_schema AS schema,
+  is_t.action_condition AS condition,
+  is_t.action_orientation AS orientation,
+  is_t.action_timing AS activation,
+  ARRAY_AGG(is_t.event_manipulation)::text[] AS events,
+  pg_p.proname AS function_name,
+  pg_n.nspname AS function_schema
+FROM
+  pg_trigger AS pg_t
+JOIN
+  pg_class AS pg_c
+ON pg_t.tgrelid = pg_c.oid
+JOIN information_schema.triggers AS is_t
+ON is_t.trigger_name = pg_t.tgname
+AND pg_c.relname = is_t.event_object_table
+JOIN pg_proc AS pg_p
+ON pg_t.tgfoid = pg_p.oid
+JOIN pg_namespace AS pg_n
+ON pg_p.pronamespace = pg_n.oid
+GROUP BY
+  pg_t.oid,
+  pg_t.tgrelid,
+  pg_t.tgenabled,
+  pg_t.tgargs,
+  pg_t.tgnargs,
+  is_t.trigger_name,
+  is_t.event_object_table,
+  is_t.event_object_schema,
+  is_t.action_condition,
+  is_t.action_orientation,
+  is_t.action_timing,
+  pg_p.proname,
+  pg_n.nspname;
 
-CREATE VIEW describe_extensions AS
-    SELECT e.extname AS "name",
-    e.extversion AS "version",
-    n.nspname AS "schema",
-    c.description AS "description"
-FROM pg_catalog.pg_extension e
-    LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
-    LEFT JOIN pg_catalog.pg_description c ON c.objoid = e.oid
-    AND c.classoid = 'pg_catalog.pg_extension'::pg_catalog.regclass
-ORDER BY 1;
+
+CREATE VIEW pgmeta_types AS select
+  t.oid::int8 as id,
+  t.typname as name,
+  n.nspname as schema,
+  format_type (t.oid, null) as format,
+  coalesce(t_enums.enums, '[]') as enums,
+  coalesce(t_attributes.attributes, '[]') as attributes,
+  obj_description (t.oid, 'pg_type') as comment
+from
+  pg_type t
+  left join pg_namespace n on n.oid = t.typnamespace
+  left join (
+    select
+      enumtypid,
+      jsonb_agg(enumlabel order by enumsortorder) as enums
+    from
+      pg_enum
+    group by
+      enumtypid
+  ) as t_enums on t_enums.enumtypid = t.oid
+  left join (
+    select
+      oid,
+      jsonb_agg(
+        jsonb_build_object('name', a.attname, 'type_id', a.atttypid::int8)
+        order by a.attnum asc
+      ) as attributes
+    from
+      pg_class c
+      join pg_attribute a on a.attrelid = c.oid
+    where
+      c.relkind = 'c' and not a.attisdropped
+    group by
+      c.oid
+  ) as t_attributes on t_attributes.oid = t.typrelid
+where
+  (
+    t.typrelid = 0
+    or (
+      select
+        c.relkind = 'c'
+      from
+        pg_class c
+      where
+        c.oid = t.typrelid
+    )
+  );
 
 
--- roles
+CREATE VIEW pgmeta_version AS SELECT
+  version(),
+  current_setting('server_version_num') :: int8 AS version_number,
+  (
+    SELECT
+      COUNT(*) AS active_connections
+    FROM
+      pg_stat_activity
+  ) AS active_connections,
+  current_setting('max_connections') :: int8 AS max_connections;
 
-CREATE VIEW describe_roles AS
-    SELECT r.rolname, r.rolsuper, r.rolinherit,
-      r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
-      r.rolconnlimit, r.rolvaliduntil,
-      ARRAY(SELECT b.rolname
-            FROM pg_catalog.pg_auth_members m
-            JOIN pg_catalog.pg_roles b ON (m.roleid = b.oid)
-            WHERE m.member = r.oid) as memberof
-    , r.rolreplication
-    , r.rolbypassrls
-FROM pg_catalog.pg_roles r
-WHERE r.rolname !~ '^pg_'
-ORDER BY 1;
-
--- types
-
-CREATE VIEW describe_types AS
-    SELECT n.nspname as "schema",
-      pg_catalog.format_type(t.oid, NULL) AS "name",
-      pg_catalog.obj_description(t.oid, 'pg_type') as "description"
-    FROM pg_catalog.pg_type t
-         LEFT JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-    WHERE (t.typrelid = 0 OR (SELECT c.relkind = 'c' FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid))
-      AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_type el WHERE el.oid = t.typelem AND el.typarray = t.oid)
-          AND n.nspname <> 'pg_catalog'
-          AND n.nspname <> 'information_schema'
-      AND pg_catalog.pg_type_is_visible(t.oid)
-    ORDER BY 1, 2;
+CREATE VIEW pgmeta_views AS SELECT
+  c.oid :: int8 AS id,
+  n.nspname AS schema,
+  c.relname AS name,
+  -- See definition of information_schema.views
+  (pg_relation_is_updatable(c.oid, false) & 20) = 20 AS is_updatable,
+  obj_description(c.oid) AS comment
+FROM
+  pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE
+  c.relkind = 'v';
