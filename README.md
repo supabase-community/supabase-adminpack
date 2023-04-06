@@ -34,9 +34,8 @@ time due to what's called "index bloat".  Understanding when this is
 happening is not obvious, so there is a rather complex query you can
 run to detect it.
 
-                     View "adminpack.index_bloat"
       Column      |       Type       | Collation | Nullable | Default
-------------------+------------------+-----------+----------+---------
+------------------|------------------|-----------|----------|---------
  current_database | name             |           |          |
  schemaname       | name             |           |          |
  tblname          | name             |           |          |
