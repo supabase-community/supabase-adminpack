@@ -34,19 +34,19 @@ time due to what's called "index bloat".  Understanding when this is
 happening is not obvious, so there is a rather complex query you can
 run to detect it.
 
-      Column      |       Type       | Collation | Nullable | Default
-------------------|------------------|-----------|----------|---------
- current_database | name             |           |          |
- schemaname       | name             |           |          |
- tblname          | name             |           |          |
- idxname          | name             |           |          |
- real_size        | numeric          |           |          |
- extra_size       | numeric          |           |          |
- extra_pct        | double precision |           |          |
- fillfactor       | integer          |           |          |
- bloat_size       | double precision |           |          |
- bloat_pct        | double precision |           |          |
- is_na            | boolean          |           |          |
+|      Column      |       Type       | Collation | Nullable | Default|
+|------------------|------------------|-----------|----------|---------|
+| current_database | name             |           |          ||
+| schemaname       | name             |           |          ||
+| tblname          | name             |           |          ||
+| idxname          | name             |           |          ||
+| real_size        | numeric          |           |          ||
+| extra_size       | numeric          |           |          ||
+| extra_pct        | double precision |           |          ||
+| fillfactor       | integer          |           |          ||
+| bloat_size       | double precision |           |          ||
+| bloat_pct        | double precision |           |          ||
+| is_na            | boolean          |           |          ||
 
 
 ## Table Bloat
