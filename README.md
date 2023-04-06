@@ -34,28 +34,60 @@ time due to what's called "index bloat".  Understanding when this is
 happening is not obvious, so there is a rather complex query you can
 run to detect it.
 
-|      Column      |       Type       | Collation | Nullable | Default|
-|------------------|------------------|-----------|----------|---------|
-| current_database | name             |           |          ||
-| schemaname       | name             |           |          ||
-| tblname          | name             |           |          ||
-| idxname          | name             |           |          ||
-| real_size        | numeric          |           |          ||
-| extra_size       | numeric          |           |          ||
-| extra_pct        | double precision |           |          ||
-| fillfactor       | integer          |           |          ||
-| bloat_size       | double precision |           |          ||
-| bloat_pct        | double precision |           |          ||
-| is_na            | boolean          |           |          ||
+|      Column      |       Type       | 
+|------------------|------------------|
+| current_database | name             | 
+| schemaname       | name             | 
+| tblname          | name             |
+| idxname          | name             |
+| real_size        | numeric          |
+| extra_size       | numeric          |
+| extra_pct        | double precision |
+| fillfactor       | integer          |
+| bloat_size       | double precision |
+| bloat_pct        | double precision |
+| is_na            | boolean          |
 
 
 ## Table Bloat
 
+|      Column      |       Type       | 
+|------------------|------------------|
+| current_database | name             |
+| schemaname       | name             |
+| tblname          | name             |
+| real_size        | numeric          |
+| extra_size       | double precision |
+| extra_pct        | double precision |
+| fillfactor       | integer          |
+| bloat_size       | double precision |
+| bloat_pct        | double precision |
+| is_na            | boolean          |
+
+
 ## Blocking PID Tree
+
+|  Column   | Type | 
+|-----------|------|
+| PID       | text |
+| Lock Info | text |
+| State     | text |
+
 
 ## Duplicate Indexes
 
+| Column |   Type   |
+|--------|----------|
+| size   | text     |
+| idx1   | regclass |
+| idx2   | regclass |
+| idx3   | regclass |
+| idx4   | regclass |
+
+
 ## Table Sizes
+
+
 
 ## Index Sizes
 
