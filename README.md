@@ -87,17 +87,64 @@ run to detect it.
 
 ## Table Sizes
 
+|      Column      |       Type       |
+|------------------|------------------|
+| table_schema     | name             |
+| table_name       | name             |
+| row_estimate     | real             |
+| total            | text             |
+| index            | text             |
+| toast            | text             |
+| table            | text             |
+| total_size_share | double precision |
 
-
-## Index Sizes
 
 ## Schema Sizes
 
+|   Column    |  Type   |
+|-------------|---------|
+| schemaname  | name    |
+| table       | text    |
+| index       | text    |
+| table_index | text    |
+| sum         | numeric |
+
+
 ## Index Usage
+
+|     Column      |  Type  |
+|-----------------|--------|
+| schemaname      | name   |
+| tablename       | name   |
+| num_rows        | bigint |
+| table_size      | text   |
+| index_name      | name   |
+| index_size      | text   |
+| unique          | text   |
+| number_of_scans | bigint |
+| tuples_read     | bigint |
+| tuples_fetched  | bigint |
+
 
 ## Last Vacuum Analyze
 
+|       Column        |           Type           |
+|---------------------|--------------------------|
+| relname             | name                     |
+| last_vacuum         | timestamp with time zone |
+| n_mod_since_analyze | timestamp with time zone |
+| last_analyze        | timestamp with time zone |
+| last_autoanalyze    | timestamp with time zone |
+| analyze_count       | bigint                   |
+| autoanalyze_count   | bigint                   |
+
 ## Table Row Estimates
+
+|   Column   |  Type  |
+|------------|--------|
+| schemaname | name   |
+| relname    | name   |
+| n_live_tup | bigint |
 
 ## PGMeta Columns
 
