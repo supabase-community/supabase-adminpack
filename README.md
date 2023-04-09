@@ -30,9 +30,10 @@ some other schema if you want it to go somewhere else.
 ## Index Bloat
 
 Index updates and querying can end up getting slower and slower over
-time due to what's called "index bloat".  Understanding when this is
-happening is not obvious, so there is a rather complex query you can
-run to detect it.
+time due to what's called "index bloat".  This is where frequent
+updates and deletes can cause space in index data structures to go
+unused.  Understanding when this is happening is not obvious, so there
+is a rather complex query you can run to detect it.
 
 |      Column      |       Type       | 
 |------------------|------------------|
@@ -51,6 +52,10 @@ run to detect it.
 
 ## Table Bloat
 
+Like index bloat, tables with high update and delete rates can also
+end up containing lots of allocated but unused space.  This query
+shows which tables have the most bloat.
+
 |      Column      |       Type       | 
 |------------------|------------------|
 | current_database | name             |
@@ -67,6 +72,11 @@ run to detect it.
 
 ## Blocking PID Tree
 
+Postgres queries can block each other, and this blocking relationship
+can form a tree, where A blocks B, which blocks C, and so on.  This
+query formats blocking queries into a tree structure so it's easy to
+see what query is causing the blockage.
+
 |  Column   | Type | 
 |-----------|------|
 | PID       | text |
@@ -75,6 +85,10 @@ run to detect it.
 
 
 ## Duplicate Indexes
+
+If a table contains duplicate indexes, then unecessary work is done
+updating and storing them, this query will show up to 4 duplicate
+indexes per table if they exist.
 
 | Column |   Type   |
 |--------|----------|
@@ -86,6 +100,8 @@ run to detect it.
 
 
 ## Table Sizes
+
+This view shows tables and their sizes.
 
 |      Column      |       Type       |
 |------------------|------------------|
@@ -101,6 +117,9 @@ run to detect it.
 
 ## Schema Sizes
 
+This view shows schemas and their sizes, which is the sum of the sizes
+of all the tables and indexes in the schema.
+
 |   Column    |  Type   |
 |-------------|---------|
 | schemaname  | name    |
@@ -111,6 +130,10 @@ run to detect it.
 
 
 ## Index Usage
+
+This view shows index size and usage.  An unused index still needs to
+be updated and that takes time an storage, so it's a good candidate to
+drop.
 
 |     Column      |  Type  |
 |-----------------|--------|
@@ -128,6 +151,8 @@ run to detect it.
 
 ## Last Vacuum Analyze
 
+This views shows the last time a table was vacuumed an analyzed.
+
 |       Column        |           Type           |
 |---------------------|--------------------------|
 | relname             | name                     |
@@ -140,6 +165,9 @@ run to detect it.
 
 ## Table Row Estimates
 
+This view shows estimates for the number of rows in a table.  This is
+just an estimate and depends on up to date table statistics.
+
 |   Column   |  Type  |
 |------------|--------|
 | schemaname | name   |
@@ -147,6 +175,8 @@ run to detect it.
 | n_live_tup | bigint |
 
 ## PGMeta Columns
+
+This view shows infromation for the columns of tables in the system.
 
 |       Column        |   Type   |
 |---------------------|----------|
@@ -169,6 +199,8 @@ run to detect it.
 | comment             | text     | 
 
 ## PGMeta Config
+
+This views shows the configuration of the database.
 
 |     Column      |  Type   |
 |-----------------|---------|
@@ -194,6 +226,8 @@ run to detect it.
 
 ## PGMeta Extensions
 
+This view shows installed extensions in the database.
+
 |      Column       | Type |
 |-------------------|------|
 | name              | name |
@@ -204,6 +238,8 @@ run to detect it.
 
 ## PGMeta Foreign Tables
 
+This view shows foreign tables in the database.
+
 | Column  |  Type  |
 |---------|--------|
 | id      | bigint |
@@ -212,6 +248,8 @@ run to detect it.
 | comment | text   |
 
 ## PGMeta Functions
+
+This view shows functions in the database.
 
 |          Column           |  Type   |
 |---------------------------|---------|
@@ -234,6 +272,8 @@ run to detect it.
 
 ## PGMeta Materialized Views
 
+This view shows materialized views in the database.
+
 |    Column    |  Type   |
 |--------------|---------|
 | id           | bigint  |
@@ -243,6 +283,8 @@ run to detect it.
 | comment      | text    |
 
 ## PGMeta Policies
+
+This view shows Row Level Security Policies in the database.
 
 |   Column   |  Type  |
 |------------|--------|
@@ -259,6 +301,8 @@ run to detect it.
 
 ## PGMeta Primary Keys
 
+This view shows primary keys in the database.
+
 |   Column   |  Type  |
 |------------|--------|
 | schema     | name   |
@@ -267,6 +311,8 @@ run to detect it.
 | table_id   | bigint |
 
 ## PGMeta Publications
+
+This view shows logical replication publishers in the database.
 
 |      Column      |  Type   |
 |------------------|---------|
@@ -281,6 +327,8 @@ run to detect it.
 
 ## PGMeta Relationships
 
+This view shows foreign key relationships in the database.
+
 |       Column        |  Type  |
 |---------------------|--------|
 | id                  | bigint |
@@ -293,6 +341,9 @@ run to detect it.
 | target_column_name  | name   |
 
 ## PGMeta Roles
+
+This view shows roles in the database system.  Note that roles are
+global objects and apply to all databases.
 
 |       Column        |           Type           |
 |---------------------|--------------------------|
@@ -313,6 +364,8 @@ run to detect it.
 
 ## PGMeta Schemas
 
+This view shows all schemas in the database.
+
 | Column |  Type  |
 |--------|--------|
 | id     | bigint |
@@ -320,6 +373,8 @@ run to detect it.
 | owner  | name   |
 
 ## PGMeta Tables
+
+This view shows all tables in the database.
 
 |       Column       |  Type   |
 |--------------------|---------|
@@ -336,6 +391,8 @@ run to detect it.
 | comment            | text    |
 
 ## PGMeta Triggers
+
+This view shows all triggers in the database.
 
 |     Column      |               Type                |
 |-----------------|-----------------------------------|
@@ -355,6 +412,8 @@ run to detect it.
 
 ## PGMeta Types
 
+This view shows all types in the database.
+
 |   Column   |  Type  |
 |------------|--------|
 | id         | bigint |
@@ -367,6 +426,8 @@ run to detect it.
 
 ## PGMeta Version
 
+This view shows the current database version.
+
 |       Column       |  Type  |
 |--------------------|--------|
 | version            | text   |
@@ -375,6 +436,8 @@ run to detect it.
 | max_connections    | bigint |
 
 ## PGMeta Views
+
+This view shows all views in the database.
 
 |    Column    |  Type   |
 |--------------|---------|
