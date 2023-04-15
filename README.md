@@ -1,6 +1,6 @@
 # supabase-adminpack
 
-A Trusted Language Extension containing a variety of useful databse admin queries.
+A Trusted Language Extension containing a variety of useful database admin queries.
 
 Postgres database admins are often faced with a variety of issues that
 require them introspecting the database state.  This extension
